@@ -1,7 +1,8 @@
 /**
  * ImportDialog: import skills from other agent platforms.
- * Sources are detected on the host, collapsed by default, and pre-scanned to
- * show counts. Checkboxes only select; skill content opens a detail dialog.
+ * Sources are detected on the host, collapsed by default, and scanned before the
+ * dialog is shown. An explicit refresh re-scans all detected sources so the
+ * summary counts remain accurate.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchWorkspaces, skillRpc } from './index.ts'
@@ -52,32 +53,76 @@ export function ImportDialog({ t, onClose, onImported }: ImportDialogProps): JSX
   const [selectedDetail, setSelectedDetail] = useState<ExternalSkill | null>(null)
   const detectInFlightRef = useRef(false)
   const hasLoadedSourcesRef = useRef(false)
+  const scanGenerationRef = useRef(0)
+  const scannedRef = useRef<Record<string, ExternalSkill[]>>({})
+  const scanningRef = useRef<Record<string, boolean>>({})
+
+  const scanSource = useCallback(async (source: string, options: { generation?: number; force?: boolean } = {}): Promise<ExternalSkill[] | null> => {
+    const generation = options.generation ?? scanGenerationRef.current
+    if (generation !== scanGenerationRef.current) return null
+    if (!options.force && (scannedRef.current[source] !== undefined || scanningRef.current[source])) return scannedRef.current[source] ?? null
+    scanningRef.current = { ...scanningRef.current, [source]: true }
+    setScanning(scanningRef.current)
+    setFailedSources((prev) => {
+      const next = new Set(prev)
+      next.delete(source)
+      return next
+    })
+    try {
+      const list = await skillRpc<ExternalSkill[]>('scan', { source })
+      if (generation !== scanGenerationRef.current) return null
+      scannedRef.current = { ...scannedRef.current, [source]: list }
+      setScanned(scannedRef.current)
+      return list
+    } catch {
+      if (generation !== scanGenerationRef.current) return null
+      scannedRef.current = { ...scannedRef.current, [source]: [] }
+      setScanned(scannedRef.current)
+      setFailedSources((prev) => new Set(prev).add(source))
+      return []
+    } finally {
+      if (generation === scanGenerationRef.current) {
+        scanningRef.current = { ...scanningRef.current, [source]: false }
+        setScanning(scanningRef.current)
+      }
+    }
+  }, [])
 
   const detectSources = useCallback(async () => {
     if (detectInFlightRef.current) return
     const initialLoad = !hasLoadedSourcesRef.current
+    const generation = scanGenerationRef.current + 1
+    scanGenerationRef.current = generation
     detectInFlightRef.current = true
     if (initialLoad) setLoadingSources(true)
     else {
       setRefreshing(true)
       setExpandedSources(new Set())
+      scannedRef.current = {}
       setScanned({})
+      scanningRef.current = {}
       setScanning({})
       setFailedSources(new Set())
+
       setSelected(new Set())
       setImportResult(null)
     }
     try {
       const result = await skillRpc<{ sources: SourceInfo[] }>('detect')
       const detected = (result.sources ?? []).filter((source) => source.key !== 'dsh')
+      if (generation !== scanGenerationRef.current) return
       setSources(detected)
-      setScanned({})
       setExpandedSources(new Set())
       setSelected(new Set())
-      setScanning({})
-      setFailedSources(new Set())
       setImportResult(null)
       hasLoadedSourcesRef.current = true
+      const entries = await Promise.all(detected.map(async (source) => {
+        const list = await scanSource(source.key, { generation, force: true })
+        return [source.key, list ?? []] as const
+      }))
+      if (generation !== scanGenerationRef.current) return
+      scannedRef.current = Object.fromEntries(entries)
+      setScanned(scannedRef.current)
     } catch {
       if (initialLoad) setSources([])
     } finally {
@@ -85,7 +130,7 @@ export function ImportDialog({ t, onClose, onImported }: ImportDialogProps): JSX
       if (initialLoad) setLoadingSources(false)
       else setRefreshing(false)
     }
-  }, [])
+  }, [scanSource])
 
   useEffect(() => { void detectSources() }, [detectSources])
 
@@ -94,25 +139,6 @@ export function ImportDialog({ t, onClose, onImported }: ImportDialogProps): JSX
       .then((result) => setWorkspaces(result.workspaces ?? []))
       .catch(() => setWorkspaces([]))
   }, [])
-
-  const scanSource = useCallback(async (source: string) => {
-    if (scanned[source] !== undefined || scanning[source]) return
-    setScanning((prev) => ({ ...prev, [source]: true }))
-    setFailedSources((prev) => {
-      const next = new Set(prev)
-      next.delete(source)
-      return next
-    })
-    try {
-      const list = await skillRpc<ExternalSkill[]>('scan', { source })
-      setScanned((prev) => ({ ...prev, [source]: list }))
-    } catch {
-      setScanned((prev) => ({ ...prev, [source]: [] }))
-      setFailedSources((prev) => new Set(prev).add(source))
-    } finally {
-      setScanning((prev) => ({ ...prev, [source]: false }))
-    }
-  }, [scanned, scanning])
 
   const toggleSource = useCallback((source: SourceInfo) => {
     const shouldExpand = !expandedSources.has(source.key)

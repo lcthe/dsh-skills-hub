@@ -1,7 +1,7 @@
 {
   "name": "@lcthe/dsh-skills-hub",
-  "version": "0.2.3",
-  "description": "DSH plugin: centralized skill manager — browse, enable/disable, import from Codex/ZCode, auto-discover skills.",
+  "version": "0.2.4",
+  "description": "DSH plugin for browsing, searching, inspecting, importing, uploading, and safely deleting skills across global and registered workspace directories.",
   "keywords": [
     "deepseek",
     "deepseek-harness",
