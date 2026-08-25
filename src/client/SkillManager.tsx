@@ -2,7 +2,7 @@
  * SkillManager: settings tab that lists the skills in dsh's own directory
  * (~/.dsh/skills, sourced through the host RPC) and opens the import dialog.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS } from './locales.ts'
@@ -10,6 +10,7 @@ import { skillRpc, deleteSkillEndpoint, fetchWorkspaces, uploadSkillEndpoint, ty
 import { DshDropdown } from './DshDropdown.tsx'
 import css from './skill-manager.module.css'
 import { ImportDialog } from './ImportDialog.tsx'
+import { UploadSkillDialog } from './UploadSkillDialog.tsx'
 import { SkillDetailDialog } from './SkillDetailDialog.tsx'
 import type { ExternalSkill } from './skill-types.ts'
 
@@ -25,18 +26,6 @@ interface SkillInfo {
   readonly linkTarget?: string
 }
 
-function readAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = String(reader.result)
-      const comma = result.indexOf(',')
-      resolve(comma >= 0 ? result.slice(comma + 1) : result)
-    }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
-}
 const DSH_SOURCE = 'dsh'
 const GLOBAL_TARGET = 'global'
 
@@ -50,6 +39,7 @@ export function SkillManager({ t }: SkillManagerProps): JSX.Element {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
   const [selectedDetail, setSelectedDetail] = useState<ExternalSkill | null>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -57,7 +47,6 @@ export function SkillManager({ t }: SkillManagerProps): JSX.Element {
   const [target, setTarget] = useState(GLOBAL_TARGET)
   const loadRequestRef = useRef(0)
   const hasLoadedRef = useRef(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     const requestId = loadRequestRef.current + 1
@@ -118,34 +107,27 @@ export function SkillManager({ t }: SkillManagerProps): JSX.Element {
     }
   }, [confirmDelete, load, target])
 
-  const onPickFolder = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.target
-    const files = Array.from(input.files ?? [])
-    input.value = ''
-    if (files.length === 0) return
-    const top = files[0].webkitRelativePath.split('/')[0] || ''
-    if (!top) return
+  const submitUpload = useCallback(async (name: string, files: readonly UploadSkillFile[]): Promise<boolean> => {
     setUploading(true)
     setUploadError(null)
     try {
-      const entries: UploadSkillFile[] = []
-      for (const file of files) {
-        const rel = file.webkitRelativePath.split('/').slice(1).join('/')
-        if (!rel) continue
-        entries.push({ path: rel, content: await readAsBase64(file) })
-      }
-      if (entries.length === 0) return
-      const result = await uploadSkillEndpoint(top, entries, target)
-      if (result.failed.length > 0 && result.imported.length === 0) {
+      const result = await uploadSkillEndpoint(name, files, target)
+      const hasOutcome = result.imported.length > 0 || result.skipped.length > 0
+      if (result.failed.length > 0 && !hasOutcome) {
         setUploadError(result.failed[0]?.message ?? t('upload.failed'))
+        return false
       }
-      if (result.imported.length > 0) void load()
+      if (hasOutcome) await load()
+      return hasOutcome
     } catch (error) {
       setUploadError((error as Error).message)
+      return false
     } finally {
       setUploading(false)
     }
   }, [load, t, target])
+
+  const uploadTargetLabel = workspaceOptions.find((option) => option.value === target)?.label ?? target
   const installedCount = skills.length
 
   return (
@@ -182,10 +164,9 @@ export function SkillManager({ t }: SkillManagerProps): JSX.Element {
         <div className={css.actionButtons}>
           <button type="button" className={`${css.actionBtn} ${refreshing ? css.actionBtnBusy : ''}`} title={t('btn.refresh')} onClick={() => void load()} disabled={refreshing || loading}>↻</button>
           <button type="button" className={css.actionBtn} title={t('btn.import')} onClick={() => setShowImport(true)}>{t('btn.importShort')}</button>
-          <button type="button" className={css.actionBtn} title={t('btn.upload')} onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+          <button type="button" className={css.actionBtn} title={t('btn.upload')} onClick={() => { setUploadError(null); setShowUpload(true) }} disabled={uploading}>
             {uploading ? t('upload.uploading') : t('btn.upload')}
           </button>
-          <input ref={fileInputRef} type="file" className={css.hiddenFileInput} multiple {...{ webkitdirectory: '' }} onChange={(event) => void onPickFolder(event)} />
         </div>
       </div>
 
@@ -246,6 +227,17 @@ export function SkillManager({ t }: SkillManagerProps): JSX.Element {
             </div>
           ))}
         </div>
+      )}
+
+      {showUpload && (
+        <UploadSkillDialog
+          t={t}
+          targetLabel={uploadTargetLabel}
+          uploading={uploading}
+          error={uploadError}
+          onClose={() => { if (!uploading) { setShowUpload(false); setUploadError(null) } }}
+          onSubmit={submitUpload}
+        />
       )}
 
       {/* Delete confirmation */}

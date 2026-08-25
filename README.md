@@ -85,7 +85,7 @@ Existing destination names are skipped; imports never overwrite an existing Skil
 
 ### Upload a local Skill folder
 
-Choose **Upload** on the main Skills page and select a local Skill folder. The upload is written to a temporary directory and moved into the selected destination only after validation succeeds.
+Choose **Upload** on the main Skills page to open the upload dialog. Drag one local Skill folder into the drop zone, or click **Choose folder** to use the system folder picker. The dialog shows the selected folder, file count, and total size before uploading to the selected global directory or registered workspace. The upload is staged in a temporary directory and moved into the destination only after validation succeeds.
 
 ### Delete a Skill
 
